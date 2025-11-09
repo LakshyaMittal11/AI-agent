@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AI Video Call + Chat (Auto-Connect + Saved Chat)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f6f9; margin:0; padding:18px; }
+    header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    h2 { margin:0; font-size:18px; }
+    #controls { margin:14px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    input, button { padding:8px 10px; font-size:14px; border-radius:6px; border:1px solid #ccc; }
+    button { background:#0066cc; color:white; cursor:pointer; }
+    button:disabled { background:#999; cursor:not-allowed; }
+    #videos { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; }
+    video { background:#000; width:320px; height:240px; border-radius:8px; object-fit:cover; }
+    #localVideo { transform: scaleX(-1); }
+    #chatBox { width:100%; max-width:700px; margin:20px auto; background:white; border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,0.1); padding:10px; }
+    #messages { height:220px; overflow-y:auto; border:1px solid #ddd; padding:8px; border-radius:6px; background:#fafafa; }
+    .msg { margin:6px 0; padding:6px 10px; border-radius:6px; max-width:80%; display:inline-block; word-wrap:break-word; }
+    .me { text-align:right; color:white; background:#0066cc; align-self:flex-end; float:right; clear:both; }
+    .peer { text-align:left; color:#222; background:#e0e0e0; float:left; clear:both; }
+    #chatInput { width:70%; }
+    #logs { white-space:pre-wrap; background:#111; color:#0f0; padding:10px; height:100px; overflow:auto; margin-top:12px; border-radius:6px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h2>🎥 AI Video Call + 💬 Chat</h2>
+    <small>Join same room on 2 devices → Video + Chat + History</small>
+  </header>
+
+  <div id="controls">
+    <label>Room: <input id="room" value="testroom" /></label>
+    <button id="joinBtn">Join</button>
+    <button id="startCallBtn" disabled>Start Call</button>
+    <button id="hangupBtn" disabled>Hangup</button>
+    <button id="muteBtn" disabled>Mute</button>
+    <button id="camBtn" disabled>Camera Off</button>
+  </div>
+
+  <div id="videos">
+    <div>
+      <div>Local</div>
+      <video id="localVideo" autoplay muted playsinline></video>
+    </div>
+    <div>
+      <div>Remote</div>
+      <video id="remoteVideo" autoplay playsinline></video>
+    </div>
+  </div>
+
+  <!-- 💬 Chat Section -->
+  <div id="chatBox">
+    <h3>💬 Chat</h3>
+    <div id="messages"></div>
+    <div style="margin-top:8px; display:flex; gap:8px;">
+      <input id="chatInput" placeholder="Type message..." />
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <div id="logs"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    const log = msg => {
+      const l=document.getElementById('logs');
+      l.textContent+=msg+'\\n';
+      l.scrollTop=l.scrollHeight;
+      console.log(msg);
+    };
+
+    const roomInput=document.getElementById('room');
+    const joinBtn=document.getElementById('joinBtn');
+    const startCallBtn=document.getElementById('startCallBtn');
+    const hangupBtn=document.getElementById('hangupBtn');
+    const muteBtn=document.getElementById('muteBtn');
+    const camBtn=document.getElementById('camBtn');
+    const localVideo=document.getElementById('localVideo');
+    const remoteVideo=document.getElementById('remoteVideo');
+    const messagesDiv=document.getElementById('messages');
+    const chatInput=document.getElementById('chatInput');
+    const sendBtn=document.getElementById('sendBtn');
+
+    let localStream=null, pc=null, room=null, isMuted=false, camOn=true;
+    const STUN={urls:'stun:stun.l.google.com:19302'};
+
+    // ======= JOIN ROOM =======
+    joinBtn.onclick=async()=>{
+      room=roomInput.value.trim();
+      if(!room) return alert('Enter room name');
+      socket.emit('join',room);
+      log('Joined room: '+room);
+      joinBtn.disabled=true;
+      startCallBtn.disabled=false;
+      try{
+        localStream=await navigator.mediaDevices.getUserMedia({audio:true,video:true});
+        localVideo.srcObject=localStream;
+        muteBtn.disabled=false; camBtn.disabled=false;
+        log('Camera ready');
+      }catch(e){
+        alert('Camera/Mic blocked: '+e.message);
+        log(e.name+' '+e.message);
+      }
+    };
+
+    // ======= CALL CONTROLS =======
+    startCallBtn.onclick=()=>{ startCallBtn.disabled=true; hangupBtn.disabled=false; createPeer(true); };
+    hangupBtn.onclick=()=>{ if(pc)pc.close(); socket.emit('leave'); log('Call ended'); };
+    muteBtn.onclick=()=>{ isMuted=!isMuted; localStream.getAudioTracks().forEach(t=>t.enabled=!isMuted); muteBtn.textContent=isMuted?'Unmute':'Mute'; };
+    camBtn.onclick=()=>{ camOn=!camOn; localStream.getVideoTracks().forEach(t=>t.enabled=camOn); camBtn.textContent=camOn?'Camera Off':'Camera On'; };
+
+    // ======= CHAT SYSTEM =======
+    sendBtn.onclick=()=>{
+      const msg=chatInput.value.trim();
+      if(!msg) return;
+      socket.emit('chatMessage',{room,text:msg});
+      addMsg('me',msg);
+      chatInput.value='';
+    };
+
+    // Received chat
+    socket.on('chatMessage',({from,text})=>{
+      addMsg('peer',text);
+    });
+
+    // Load old messages
+    socket.on('chatHistory',msgs=>{
+      log(`Loaded ${msgs.length} old messages`);
+      msgs.forEach(m=>{
+        addMsg(m.sender===socket.id?'me':'peer',m.text);
+      });
+    });
+
+    function addMsg(sender,text){
+      const d=document.createElement('div');
+      d.className='msg '+sender;
+      d.textContent=text;
+      messagesDiv.appendChild(d);
+      messagesDiv.scrollTop=messagesDiv.scrollHeight;
+    }
+
+    // ======= VIDEO CALL =======
+    socket.on('peer-joined', async ({id})=>{
+      log('Peer joined: '+id);
+      if(localStream && !pc){
+        log('Auto-starting call...');
+        await createPeer(true);
+      }
+    });
+
+    socket.on('signal',async({from,data})=>{
+      if(!pc) await createPeer(false);
+      if(data.type==='offer'){
+        await pc.setRemoteDescription(new RTCSessionDescription(data));
+        const ans=await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        socket.emit('signal',{to:from,data:pc.localDescription});
+      } else if(data.type==='answer'){
+        await pc.setRemoteDescription(new RTCSessionDescription(data));
+      } else if(data.candidate){
+        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    });
+
+    async function createPeer(isCaller){
+      pc=new RTCPeerConnection({iceServers:[STUN]});
+      pc.onicecandidate=e=>{ if(e.candidate) socket.emit('signal',{data:{candidate:e.candidate}}); };
+      pc.ontrack=e=>{ remoteVideo.srcObject=e.streams[0]; log('Remote stream received'); };
+      if(localStream){ localStream.getTracks().forEach(t=>pc.addTrack(t,localStream)); }
+      if(isCaller){
+        const offer=await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit('signal',{data:pc.localDescription});
+      }
+    }
+
+    socket.on('connect',()=>log('Socket connected'));
+  </script>
+</body>
+</html>
