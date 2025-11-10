@@ -21,15 +21,22 @@ io.on('connection', socket => {
     // No DB: send empty chat history so frontend can handle it
     socket.emit('chatHistory', []);
 
-    // notify others in the room
+    // notify others in the room about this new peer
     socket.to(room).emit('peer-joined', { id: socket.id });
+
+    // tell this socket about existing peers so it can initiate connections
+    const clients = Array.from(io.sockets.adapter.rooms.get(room) || []);
+    const otherClients = clients.filter(id => id !== socket.id);
+    socket.emit('existingPeers', otherClients);
   });
 
   // WebRTC signaling
+  // data: { to?, type?, sdp?, candidate? }
   socket.on('signal', ({ to, data }) => {
     if (to) {
       io.to(to).emit('signal', { from: socket.id, data });
     } else if (socket.room) {
+      // broadcast to room (used for offers from caller)
       socket.to(socket.room).emit('signal', { from: socket.id, data });
     }
   });
@@ -44,6 +51,7 @@ io.on('connection', socket => {
     if (socket.room) {
       socket.to(socket.room).emit('peer-left', { id: socket.id });
       socket.leave(socket.room);
+      delete socket.room;
     }
   });
 

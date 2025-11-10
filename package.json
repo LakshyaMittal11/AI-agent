@@ -17,5 +17,13 @@
     "socket.io": "^4.8.1",
     "twilio": "^5.10.4"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LakshyaMittal11/AI-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LakshyaMittal11/AI-agent/issues"
+  },
+  "homepage": "https://github.com/LakshyaMittal11/AI-agent#readme",
   "description": ""
 }
