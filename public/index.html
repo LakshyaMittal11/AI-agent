@@ -1,9 +1,9 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>🎥 AI Video Call + 💬 Chat</title>
+  <meta charset="utf-8" />
+  <title>AI Video Call + Chat — Audio Toggle & Screen Share</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root{--bg:#f4f6f9;--accent:#0b76f6;--muted:#6b7280}
     *{box-sizing:border-box}
@@ -12,7 +12,7 @@
     header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
     h1{margin:0;font-size:18px}
     .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
-    input,button{padding:8px 10px;font-size:14px;border-radius:8px;border:1px solid #d1d5db}
+    input,button,select{padding:8px 10px;font-size:14px;border-radius:8px;border:1px solid #d1d5db}
     button{background:var(--accent);color:#fff;border:none;cursor:pointer}
     button.ghost{background:#fff;color:var(--accent);border:1px solid var(--accent)}
     button:disabled{opacity:.5;cursor:not-allowed}
@@ -27,6 +27,7 @@
     .me{background:var(--accent);color:#fff;float:right}
     .peer{background:#eef2ff;color:#000;float:left}
     .small{font-size:13px;color:var(--muted)}
+    .name-badge{font-weight:600;margin-right:8px}
     @media (max-width:600px){.tile{height:140px}}
   </style>
 </head>
@@ -44,16 +45,20 @@
       <label>Name: <input id="name" placeholder="Your name" /></label>
       <label>Room: <input id="room" value="testroom" /></label>
       <button id="joinBtn">Join Room</button>
-      <button id="hangupBtn" class="ghost" disabled>Leave</button>
+      <button id="startCallBtn" disabled>Start Call</button>
+      <button id="hangupBtn" disabled class="ghost">Leave</button>
 
-      <div style="width:1px;background:#e6edf3;margin:0 6px;height:28px"></div>
+      <div style="width:1px;background:#e6edf3;margin:0 6px; height:28px"></div>
 
-      <button id="flipBtn" disabled>Flip</button>
-      <button id="muteBtn" disabled>Mute</button>
+      <button id="audioBtn" disabled>Mute</button>
       <button id="camBtn" disabled>Cam Off</button>
+      <button id="flipBtn" disabled>Flip Camera</button>
+      <button id="screenBtn" disabled>Share Screen</button>
     </div>
 
-    <div class="stage" id="stage"></div>
+    <div class="stage" id="stage">
+      <!-- tiles will be appended here -->
+    </div>
 
     <div class="chat">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -75,168 +80,410 @@
     const nameInput = document.getElementById('name');
     const roomInput = document.getElementById('room');
     const joinBtn = document.getElementById('joinBtn');
+    const startCallBtn = document.getElementById('startCallBtn');
     const hangupBtn = document.getElementById('hangupBtn');
-    const flipBtn = document.getElementById('flipBtn');
-    const muteBtn = document.getElementById('muteBtn');
+    const audioBtn = document.getElementById('audioBtn');
     const camBtn = document.getElementById('camBtn');
+    const flipBtn = document.getElementById('flipBtn');
+    const screenBtn = document.getElementById('screenBtn');
     const stage = document.getElementById('stage');
     const messagesDiv = document.getElementById('messages');
     const chatInput = document.getElementById('chatInput');
     const sendBtn = document.getElementById('sendBtn');
     const countSpan = document.getElementById('count');
 
-    let localStream, videoTrack, currentDeviceId;
-    let peers = {}; // id -> {pc, videoSender, videoEl}
+    let localStream = null, cameraTrack = null, audioEnabled = true;
+    let screenStream = null, isSharingScreen = false;
+    let currentDeviceId = null;
+    let peers = {}; // peerId -> { pc, videoSender, audioSender, el, videoEl, name }
     let room = null;
+    let callStarted = false;
     const STUN = { urls: 'stun:stun.l.google.com:19302' };
 
-    function makeTile(id, label, isLocal=false){
-      const div=document.createElement('div'); div.className='tile '+(isLocal?'local':''); div.id='tile-'+id;
-      const vid=document.createElement('video'); vid.autoplay=true; vid.playsInline=true; if(isLocal) vid.muted=true; vid.id='video-'+id;
+    function createTile(id, label, isLocal=false){
+      const wrapper=document.createElement('div');
+      wrapper.className='tile '+(isLocal?'local':'');
+      wrapper.id='tile-'+id;
+      const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; if(isLocal) v.muted=true;
+      v.id='video-'+id;
       const lab=document.createElement('div'); lab.className='label'; lab.textContent=label;
-      div.append(vid,lab);
-      return {div,vid};
+      wrapper.appendChild(v); wrapper.appendChild(lab);
+      return { wrapper, videoEl:v, labelEl:lab };
     }
 
-    function updateCount(){ countSpan.textContent=Object.keys(peers).length; }
+    function updateCount(){ countSpan.textContent = Object.keys(peers).length; }
 
-    joinBtn.onclick = async ()=>{
-      const name = nameInput.value.trim() || 'Anonymous';
-      room = roomInput.value.trim();
-      if(!room) return alert('Enter room');
-      try{
-        localStream = await navigator.mediaDevices.getUserMedia({audio:true,video:true});
-        videoTrack = localStream.getVideoTracks()[0];
-        currentDeviceId = videoTrack.getSettings().deviceId || null;
-        const {div,vid} = makeTile(socket.id, name+" (You)", true);
-        stage.prepend(div);
-        vid.srcObject=localStream;
-        peers[socket.id]={videoEl:vid};
-        socket.emit('join',{room,name});
-        joinBtn.disabled=true; hangupBtn.disabled=false;
-        flipBtn.disabled=false; muteBtn.disabled=false; camBtn.disabled=false;
-      }catch(e){ alert("Camera/Mic error: "+e.message); }
-    };
-
-    socket.on('connect',()=> sidSpan.textContent=socket.id );
-
-    socket.on('existingPeers', list=>{
-      list.forEach(async p=>{
-        if(p.id===socket.id) return;
-        addRemote(p.id,p.name);
-        await createPeer(p.id,true);
-      });
-    });
-
-    socket.on('peer-joined',async ({id,name})=>{
-      if(id===socket.id) return;
-      addRemote(id,name);
-      await createPeer(id,true);
-    });
-
-    socket.on('peer-left',({id})=> removePeer(id));
-
-    socket.on('signal',async ({from,data})=>{
-      if(!peers[from]) addRemote(from,'Peer');
-      if(!peers[from].pc) await createPeer(from,false);
-      const pc=peers[from].pc;
-      if(data.type==='offer'){
-        await pc.setRemoteDescription(new RTCSessionDescription(data));
-        const ans=await pc.createAnswer();
-        await pc.setLocalDescription(ans);
-        socket.emit('signal',{to:from,data:pc.localDescription});
-      }else if(data.type==='answer'){
-        await pc.setRemoteDescription(new RTCSessionDescription(data));
-      }else if(data.candidate){
-        try{await pc.addIceCandidate(new RTCIceCandidate(data.candidate));}catch(e){console.warn(e);}
-      }
-    });
-
-    function addRemote(id,name){
+    function showLocal(name){
+      const id = socket.id || 'local';
       if(document.getElementById('tile-'+id)) return;
-      const {div,vid}=makeTile(id,name);
-      stage.append(div);
-      peers[id]={videoEl:vid};
+      const { wrapper, videoEl, labelEl } = createTile(id, name + ' (You)', true);
+      stage.prepend(wrapper);
+      if(localStream) videoEl.srcObject = localStream;
+      peers[id] = peers[id] || {};
+      peers[id].el = wrapper; peers[id].videoEl = videoEl; peers[id].name = name;
+      updateCount();
+    }
+
+    function addRemote(id, name='Peer'){
+      if(document.getElementById('tile-'+id)) return;
+      const { wrapper, videoEl, labelEl } = createTile(id, (name || 'Peer'));
+      stage.appendChild(wrapper);
+      peers[id] = peers[id] || {};
+      peers[id].el = wrapper; peers[id].videoEl = videoEl; peers[id].name = name;
       updateCount();
     }
 
     function removePeer(id){
-      if(peers[id]){ if(peers[id].pc) peers[id].pc.close(); const t=document.getElementById('tile-'+id); if(t)t.remove(); delete peers[id]; updateCount();}
+      if(peers[id]){
+        try{ if(peers[id].pc) peers[id].pc.close(); }catch(e){}
+        if(peers[id].el) peers[id].el.remove();
+        // if it's remote peer, delete; if local, keep local tile removed on hangup
+        delete peers[id];
+      }
+      updateCount();
     }
 
-    async function createPeer(id,isInitiator){
-      const pc=new RTCPeerConnection({iceServers:[STUN]});
-      peers[id].pc=pc;
-      pc.onicecandidate=e=>{if(e.candidate)socket.emit('signal',{to:id,data:{candidate:e.candidate}});};
-      pc.ontrack=e=>{peers[id].videoEl.srcObject=e.streams[0];};
+    // ===== JOIN =====
+    joinBtn.onclick = async () => {
+      const name = (nameInput.value || '').trim() || 'Anonymous';
+      room = roomInput.value.trim();
+      if(!room) return alert('Enter room');
+      joinBtn.disabled = true;
+      try {
+        // get camera + mic first
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        cameraTrack = localStream.getVideoTracks()[0];
+        currentDeviceId = cameraTrack ? (cameraTrack.getSettings().deviceId || null) : null;
+        audioEnabled = true;
+
+        // show local preview and enable controls
+        showLocal(name);
+        audioBtn.disabled = false; camBtn.disabled = false; flipBtn.disabled = false; screenBtn.disabled = false;
+        startCallBtn.disabled = false;
+
+        // emit join AFTER we have media
+        socket.emit('join', { room, name });
+      } catch (e) {
+        alert('Camera/Mic error: ' + e.message);
+        joinBtn.disabled = false;
+      }
+    };
+
+    // signaling
+    socket.on('connect', ()=>{ sidSpan.textContent = socket.id; });
+
+    socket.on('existingPeers', list=>{
+      list.forEach(async p => {
+        if(p.id === socket.id) return;
+        addRemote(p.id, p.name);
+        if(callStarted){
+          await initPeer(p.id, true);
+        }
+      });
+    });
+
+    socket.on('peer-joined', async ({id, name})=>{
+      if(id === socket.id) return;
+      addRemote(id, name);
+      if(callStarted){
+        await initPeer(id, true);
+      }
+    });
+
+    socket.on('peer-left', ({id, name})=>{
+      removePeer(id);
+    });
+
+    socket.on('signal', async ({ from, data })=>{
+      if(!peers[from]) addRemote(from, 'Peer');
+      if(!peers[from].pc) await initPeer(from, false);
+      const pc = peers[from].pc;
+      if(!pc) return;
+      try {
+        if(data.type === 'offer'){
+          await pc.setRemoteDescription(new RTCSessionDescription(data));
+          const ans = await pc.createAnswer();
+          await pc.setLocalDescription(ans);
+          socket.emit('signal', { to: from, data: pc.localDescription });
+        } else if(data.type === 'answer'){
+          await pc.setRemoteDescription(new RTCSessionDescription(data));
+        } else if(data.candidate){
+          try{ await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); }catch(e){ console.warn(e); }
+        }
+      } catch(e){ console.warn('signal handler error', e); }
+    });
+
+    // chat
+    sendBtn.onclick=()=>{
+      const text = chatInput.value.trim(); if(!text) return;
+      const name = (nameInput.value || '').trim() || 'Anonymous';
+      socket.emit('chatMessage', { room, text });
+      appendMsg('me', name + ': ' + text);
+      chatInput.value = '';
+    };
+    socket.on('chatMessage', ({ from, name, text })=>{
+      appendMsg('peer', (name || 'Peer') + ': ' + text);
+    });
+
+    function appendMsg(kind, text){
+      const d=document.createElement('div'); d.className='msg '+(kind==='me'?'me':'peer'); d.textContent=text;
+      messagesDiv.appendChild(d); messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    // Create peer connection and add local tracks (or replace later)
+    async function initPeer(id, isInitiator){
+      if(peers[id] && peers[id].pc) return peers[id].pc;
+      addRemote(id, peers[id] && peers[id].name ? peers[id].name : 'Peer');
+      const pc = new RTCPeerConnection({ iceServers: [STUN] });
+      peers[id] = peers[id] || {};
+      peers[id].pc = pc;
+
+      pc.onicecandidate = e => { if(e.candidate) socket.emit('signal', { to: id, data: { candidate: e.candidate } }); };
+
+      pc.ontrack = e => {
+        const el = peers[id].videoEl || document.getElementById('video-'+id);
+        if(el) el.srcObject = e.streams[0];
+      };
+
+      // add audio & video tracks if localStream exists
       if(localStream){
-        localStream.getTracks().forEach(track=>{
-          const sender=pc.addTrack(track,localStream);
-          if(track.kind==='video') peers[id].videoSender=sender;
+        localStream.getTracks().forEach(track => {
+          try{
+            const sender = pc.addTrack(track, localStream);
+            if(track.kind === 'video') peers[id].videoSender = sender;
+            if(track.kind === 'audio') peers[id].audioSender = sender;
+          }catch(e){ console.warn('addTrack failed', e); }
         });
       }
+
       if(isInitiator){
-        const offer=await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        socket.emit('signal',{to:id,data:pc.localDescription});
+        try{
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('signal', { to: id, data: pc.localDescription });
+        }catch(e){ console.warn('createOffer failed', e); }
+      }
+      return pc;
+    }
+
+    // START CALL
+    startCallBtn.onclick = async ()=>{
+      if(!room) return alert('Join a room first');
+      if(callStarted) return;
+      callStarted = true;
+      startCallBtn.disabled = true;
+      hangupBtn.disabled = false;
+      // create outgoing offers to all existing peers
+      const otherIds = Object.keys(peers).filter(id => id !== socket.id);
+      for(const id of otherIds){
+        try{ await initPeer(id, true); }catch(e){ console.warn('start call init failed', e); }
+      }
+    };
+
+    // HANGUP / LEAVE
+    hangupBtn.onclick = ()=>{
+      socket.emit('leave');
+      Object.keys(peers).forEach(id=>{
+        if(peers[id] && peers[id].pc) { try{ peers[id].pc.close(); }catch(e){} }
+        const tile = document.getElementById('tile-'+id); if(tile) tile.remove();
+      });
+      peers = {};
+      callStarted = false;
+      // stop all local tracks & screen
+      if(localStream){
+        localStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
+        localStream = null;
+        cameraTrack = null;
+      }
+      if(screenStream){
+        screenStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
+        screenStream = null;
+        isSharingScreen = false;
+      }
+      // reset UI
+      joinBtn.disabled = false; startCallBtn.disabled = true; hangupBtn.disabled = true;
+      audioBtn.disabled = true; camBtn.disabled = true; flipBtn.disabled = true; screenBtn.disabled = true;
+      updateCount();
+    };
+
+    // AUDIO toggle (user-controlled)
+    audioBtn.onclick = ()=>{
+      if(!localStream) return alert('Join room and allow microphone first');
+      const audioTracks = localStream.getAudioTracks();
+      if(!audioTracks || audioTracks.length === 0) return alert('No audio track available');
+      audioEnabled = !audioEnabled;
+      audioTracks.forEach(t => t.enabled = audioEnabled);
+      audioBtn.textContent = audioEnabled ? 'Mute' : 'Unmute';
+      // no need to replace sender; disabling the track stops sending audio
+    };
+
+    // CAM toggle (video on/off for local track)
+    camBtn.onclick = ()=>{
+      if(!localStream) return alert('Join room and allow camera first');
+      const videoTracks = localStream.getVideoTracks();
+      if(!videoTracks || videoTracks.length === 0) return alert('No video track available');
+      const enabled = videoTracks[0].enabled;
+      videoTracks.forEach(t => t.enabled = !enabled);
+      camBtn.textContent = enabled ? 'Cam On' : 'Cam Off';
+    };
+
+    // Flip camera
+    flipBtn.onclick = async ()=>{
+      try{
+        if(!localStream) return alert('Join room and allow camera first');
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const vids = devices.filter(d => d.kind === 'videoinput');
+        if(vids.length < 2) return alert('No second camera found');
+        let idx = vids.findIndex(v => v.deviceId === currentDeviceId);
+        idx = (idx + 1) % vids.length;
+        const nextId = vids[idx].deviceId;
+
+        // If sharing screen, don't flip camera (screen replaces camera). We flip camera only when camera is active.
+        if(isSharingScreen){
+          alert('Stop screen sharing to flip camera.');
+          return;
+        }
+
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nextId } }, audio: false });
+        const newTrack = newStream.getVideoTracks()[0];
+        if(!newTrack) throw new Error('No video track from new camera');
+
+        // replace cameraTrack in localStream
+        if(cameraTrack){
+          try{ localStream.removeTrack(cameraTrack); }catch(e){}
+          try{ cameraTrack.stop(); }catch(e){}
+        }
+        localStream.addTrack(newTrack);
+        cameraTrack = newTrack;
+        currentDeviceId = nextId;
+
+        // update local preview
+        const localVid = document.getElementById('video-'+socket.id);
+        if(localVid) localVid.srcObject = localStream;
+
+        // replace video sender track for each peer
+        Object.values(peers).forEach(async p => {
+          if(p.videoSender && p.videoSender.replaceTrack) {
+            try{ await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+          } else if(p && p.pc) {
+            // fallback: remove old sender and add new track
+            try{
+              p.pc.getSenders().forEach(s => {
+                if(s.track && s.track.kind === 'video') { try{ p.pc.removeTrack(s); }catch(e){} }
+              });
+              const sender = p.pc.addTrack(cameraTrack, localStream);
+              p.videoSender = sender;
+            }catch(e){ console.warn('fallback replace failed', e); }
+          }
+        });
+
+      }catch(e){ alert('Flip failed: '+e.message); }
+    };
+
+    // SCREEN SHARE toggle
+    screenBtn.onclick = async ()=>{
+      if(!localStream) return alert('Join room and allow camera first');
+
+      if(!isSharingScreen){
+        // start screen share
+        try{
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+          const screenTrack = screenStream.getVideoTracks()[0];
+          if(!screenTrack) throw new Error('No screen track');
+
+          // when screen sharing stops (user presses stop in browser), automatically stop and restore camera
+          screenTrack.onended = () => { stopScreenShare(); };
+
+          // replace camera track in localStream with screen track
+          if(cameraTrack){
+            try{ localStream.removeTrack(cameraTrack); }catch(e){}
+            try{ cameraTrack.stop(); }catch(e){}
+          }
+          localStream.addTrack(screenTrack);
+          isSharingScreen = true;
+
+          // update local preview
+          const localVid = document.getElementById('video-'+socket.id);
+          if(localVid) localVid.srcObject = localStream;
+
+          // replace sender track for each peer
+          Object.values(peers).forEach(async p => {
+            if(p.videoSender && p.videoSender.replaceTrack) {
+              try{ await p.videoSender.replaceTrack(screenTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+            } else if(p && p.pc) {
+              try{
+                p.pc.getSenders().forEach(s => {
+                  if(s.track && s.track.kind === 'video') { try{ p.pc.removeTrack(s); }catch(e){} }
+                });
+                const sender = p.pc.addTrack(screenTrack, localStream);
+                p.videoSender = sender;
+              }catch(e){ console.warn('fallback replace failed', e); }
+            }
+          });
+
+          screenBtn.textContent = 'Stop Sharing';
+        } catch(e){ alert('Screen share failed: '+e.message); }
+      } else {
+        // stop screen share and restore camera
+        stopScreenShare();
+      }
+    };
+
+    async function stopScreenShare(){
+      if(!isSharingScreen) return;
+      try{
+        // stop screen tracks
+        if(screenStream){
+          screenStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
+        }
+        screenStream = null;
+
+        // try to re-open camera (getUserMedia) to restore cameraTrack
+        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const newCamTrack = camStream.getVideoTracks()[0];
+        if(!newCamTrack) throw new Error('Could not get camera after screen share');
+
+        // remove any video tracks currently in localStream (which were screen)
+        localStream.getVideoTracks().forEach(t => {
+          try{ localStream.removeTrack(t); }catch(e){}
+          try{ t.stop(); }catch(e){}
+        });
+
+        // add new camera track
+        localStream.addTrack(newCamTrack);
+        cameraTrack = newCamTrack;
+        isSharingScreen = false;
+
+        // update local preview
+        const localVid = document.getElementById('video-'+socket.id);
+        if(localVid) localVid.srcObject = localStream;
+
+        // replace sender tracks for peers
+        Object.values(peers).forEach(async p => {
+          if(p.videoSender && p.videoSender.replaceTrack) {
+            try{ await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+          } else if(p && p.pc) {
+            try{
+              p.pc.getSenders().forEach(s => {
+                if(s.track && s.track.kind === 'video') { try{ p.pc.removeTrack(s); }catch(e){} }
+              });
+              const sender = p.pc.addTrack(cameraTrack, localStream);
+              p.videoSender = sender;
+            }catch(e){ console.warn('fallback replace failed', e); }
+          }
+        });
+
+        screenBtn.textContent = 'Share Screen';
+      }catch(e){
+        console.warn('stopScreenShare error', e);
+        screenBtn.textContent = 'Share Screen';
+        isSharingScreen = false;
       }
     }
 
-    sendBtn.onclick=()=>{
-      const text=chatInput.value.trim();
-      if(!text)return;
-      const name=nameInput.value.trim()||'Anonymous';
-      socket.emit('chatMessage',{room,text});
-      appendMsg('me',name+': '+text);
-      chatInput.value='';
-    };
-    socket.on('chatMessage',({name,text})=> appendMsg('peer',name+': '+text) );
+    // keep UI stable on beforeunload
+    window.addEventListener('beforeunload', ()=>{ try{ socket.emit('leave'); }catch(e){} });
 
-    function appendMsg(type,text){
-      const d=document.createElement('div');
-      d.className='msg '+(type==='me'?'me':'peer');
-      d.textContent=text;
-      messagesDiv.appendChild(d);
-      messagesDiv.scrollTop=messagesDiv.scrollHeight;
-    }
-
-    hangupBtn.onclick=()=>{
-      socket.emit('leave');
-      Object.keys(peers).forEach(id=>{removePeer(id);});
-      if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
-      joinBtn.disabled=false;hangupBtn.disabled=true;flipBtn.disabled=true;muteBtn.disabled=true;camBtn.disabled=true;
-    };
-
-    muteBtn.onclick=()=>{
-      if(!localStream)return;
-      const enabled=localStream.getAudioTracks()[0].enabled;
-      localStream.getAudioTracks().forEach(t=>t.enabled=!enabled);
-      muteBtn.textContent=enabled?'Unmute':'Mute';
-    };
-
-    camBtn.onclick=()=>{
-      if(!localStream)return;
-      const enabled=localStream.getVideoTracks()[0].enabled;
-      localStream.getVideoTracks().forEach(t=>t.enabled=!enabled);
-      camBtn.textContent=enabled?'Cam On':'Cam Off';
-    };
-
-    flipBtn.onclick=async()=>{
-      const devices=await navigator.mediaDevices.enumerateDevices();
-      const vids=devices.filter(d=>d.kind==='videoinput');
-      if(vids.length<2)return alert('No second camera found');
-      let idx=vids.findIndex(v=>v.deviceId===currentDeviceId);
-      idx=(idx+1)%vids.length;
-      const nextId=vids[idx].deviceId;
-      const newStream=await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:nextId}}});
-      const newTrack=newStream.getVideoTracks()[0];
-      localStream.removeTrack(videoTrack); videoTrack.stop();
-      localStream.addTrack(newTrack); videoTrack=newTrack; currentDeviceId=nextId;
-      document.getElementById('video-'+socket.id).srcObject=localStream;
-      Object.values(peers).forEach(p=>{
-        if(p.videoSender)p.videoSender.replaceTrack(videoTrack);
-      });
-    };
   </script>
 </body>
 </html>
