@@ -1,4 +1,4 @@
-// server.js (updated) - signaling + member meta (device/timezone/country-guess)
+// server.js (fixed + safer + require-name) - signaling + member meta (device/timezone/country-guess)
 // Usage: npm init -y && npm install express socket.io && node server.js
 
 const express = require('express');
@@ -32,10 +32,35 @@ function sanitizeName(name) {
   return n;
 }
 
+// sanitize meta: keep only small useful fields and trim strings
+function sanitizeMeta(meta) {
+  if (!meta || typeof meta !== 'object') return {};
+  const out = {};
+  if (typeof meta.deviceType === 'string') out.deviceType = meta.deviceType.slice(0, 20);
+  if (typeof meta.language === 'string') out.language = meta.language.slice(0, 20);
+  if (typeof meta.timezone === 'string') out.timezone = meta.timezone.slice(0, 50);
+  if (typeof meta.countryGuess === 'string') out.countryGuess = meta.countryGuess.slice(0, 20);
+  // avoid huge userAgent strings; keep only prefix if present
+  if (typeof meta.userAgent === 'string') out.userAgent = meta.userAgent.slice(0, 120);
+  out._sanitizedAt = Date.now();
+  return out;
+}
+
+// helper: safe getter for room client IDs (returns array)
+function getRoomClientIds(room) {
+  try {
+    const s = io.sockets.adapter.rooms.get(room);
+    if (!s) return [];
+    return Array.from(s);
+  } catch (err) {
+    return [];
+  }
+}
+
 // helper: return members with meta: [{ id, name, meta }]
 function getRoomMembersWithMeta(room) {
   try {
-    const clients = Array.from(io.sockets.adapter.rooms.get(room) || []);
+    const clients = getRoomClientIds(room);
     return clients.map(id => {
       const s = io.sockets.sockets.get(id);
       return {
@@ -54,7 +79,7 @@ function emitRoomMembers(room) {
   const members = getRoomMembersWithMeta(room);
   const payload = { members, count: members.length, ts: Date.now() };
   io.to(room).emit('roomMembers', payload);
-  // also emit lightweight meta if clients want it separately
+  // lightweight meta
   io.to(room).emit('roomMeta', { count: payload.count, ts: payload.ts });
   return payload;
 }
@@ -62,7 +87,7 @@ function emitRoomMembers(room) {
 // compute and emit delta between stored set and current set (include meta)
 function emitRoomDelta(room) {
   const prevSet = roomMembersMap.get(room) || new Set();
-  const currentClients = Array.from(io.sockets.adapter.rooms.get(room) || []);
+  const currentClients = getRoomClientIds(room);
   const currSet = new Set(currentClients);
 
   const joined = currentClients.filter(id => !prevSet.has(id)).map(id => {
@@ -71,13 +96,17 @@ function emitRoomDelta(room) {
   });
 
   const left = Array.from(prevSet).filter(id => !currSet.has(id)).map(id => {
-    // once left, socket object might not exist — best-effort
+    // socket may be gone; best-effort name/meta from last-known (we don't store historical meta separately)
     const s = io.sockets.sockets.get(id);
     return { id, name: (s && s.data && s.data.name) ? s.data.name : 'Anonymous', meta: (s && s.data && s.data.meta) ? s.data.meta : {} };
   });
 
-  // update map
-  roomMembersMap.set(room, currSet);
+  // update map (if empty, delete)
+  if (currSet.size === 0) {
+    roomMembersMap.delete(room);
+  } else {
+    roomMembersMap.set(room, currSet);
+  }
 
   const delta = { joined, left, ts: Date.now() };
   if (joined.length || left.length) {
@@ -94,30 +123,53 @@ io.on('connection', socket => {
   // join: accept optional clientMeta
   socket.on('join', ({ room, name, clientMeta } = {}) => {
     try {
+      // === require name check (server-side enforcement) ===
+      const trimmedName = (typeof name === 'string') ? name.trim() : '';
+      if (!trimmedName) {
+        // ask client to provide a name before joining
+        socket.emit('require-name', { message: 'Name required to join the room' });
+        return;
+      }
+
       if (!room) {
         socket.emit('error', { message: 'room required' });
         return;
       }
 
-      const safeName = sanitizeName(name);
+      const safeName = sanitizeName(trimmedName);
       socket.data.name = safeName;
-      socket.data.meta = (clientMeta && typeof clientMeta === 'object') ? clientMeta : {};
+      socket.data.meta = sanitizeMeta(clientMeta);
 
       // if already in same room, send members to sync
       if (socket.data.room === room) {
-        const payload = emitRoomMembers(room);
-        socket.emit('existingPeers', payload.members.filter(m => m.id !== socket.id));
+        const members = getRoomMembersWithMeta(room).filter(m => m.id !== socket.id);
+        socket.emit('existingPeers', members);
         return;
       }
 
-      // join
+      // if previously in another room, leave it first (clean up map + notify)
+      if (socket.data.room && socket.data.room !== room) {
+        const prevRoom = socket.data.room;
+        socket.to(prevRoom).emit('peer-left', { id: socket.id, name: socket.data.name, meta: socket.data.meta });
+        socket.leave(prevRoom);
+        const prevSet = roomMembersMap.get(prevRoom);
+        if (prevSet && prevSet.has(socket.id)) {
+          prevSet.delete(socket.id);
+          if (prevSet.size === 0) roomMembersMap.delete(prevRoom);
+          else roomMembersMap.set(prevRoom, prevSet);
+        }
+        emitRoomDelta(prevRoom);
+        emitRoomMembers(prevRoom);
+      }
+
+      // join new room
       socket.join(room);
       socket.data.room = room;
 
       console.log(`👤 ${socket.id} (${socket.data.name}) joined room ${room} — meta:`, socket.data.meta);
 
       // send list of others
-      const clients = Array.from(io.sockets.adapter.rooms.get(room) || []);
+      const clients = getRoomClientIds(room);
       const otherClients = clients
         .filter(id => id !== socket.id)
         .map(id => {
@@ -160,6 +212,7 @@ io.on('connection', socket => {
     try {
       if (!room || typeof text !== 'string') return;
       const name = socket.data && socket.data.name ? socket.data.name : 'Anonymous';
+      // emit to room excluding sender
       socket.to(room).emit('chatMessage', { from: socket.id, name, text });
     } catch (err) {
       console.warn('chatMessage error', err);
@@ -182,7 +235,8 @@ io.on('connection', socket => {
         const set = roomMembersMap.get(room);
         if (set && set.has(socket.id)) {
           set.delete(socket.id);
-          roomMembersMap.set(room, set);
+          if (set.size === 0) roomMembersMap.delete(room);
+          else roomMembersMap.set(room, set);
         }
 
         emitRoomDelta(room);
@@ -206,7 +260,8 @@ io.on('connection', socket => {
         const set = roomMembersMap.get(room);
         if (set && set.has(socket.id)) {
           set.delete(socket.id);
-          roomMembersMap.set(room, set);
+          if (set.size === 0) roomMembersMap.delete(room);
+          else roomMembersMap.set(room, set);
         }
 
         emitRoomDelta(room);
