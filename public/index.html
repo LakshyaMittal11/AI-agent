@@ -2,393 +2,228 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>AI Video Call + Chat — Fixed</title>
+  <title>Video Call — Working Client (fixed fullscreen & mobile)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    :root{--bg:#f4f6f9;--accent:#0b76f6;--muted:#6b7280}
-    *{box-sizing:border-box}
-    body{font-family:Inter,system-ui,Arial,sans-serif;background:var(--bg);margin:0;color:#111}
-    .app{max-width:1100px;margin:18px auto;padding:18px}
-    header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-    h1{margin:0;font-size:18px}
-    .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px}
-    input,button,select{padding:8px 10px;font-size:14px;border-radius:8px;border:1px solid #d1d5db}
+    :root{
+      --bg:#0b1220; --muted:#9aa7bd; --accent:#0b76f6;
+    }
+    body{font-family:Inter,Arial,sans-serif;background:var(--bg);color:#e6eef8;padding:14px;margin:0}
+    .top{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    input,button{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit}
     button{background:var(--accent);color:#fff;border:none;cursor:pointer}
-    button.ghost{background:#fff;color:var(--accent);border:1px solid var(--accent)}
+    button.ghost{background:transparent;border:1px solid var(--accent);color:var(--accent)}
     button:disabled{opacity:.5;cursor:not-allowed}
-    .stage{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:18px}
-    .tile{background:#000;border-radius:10px;overflow:hidden;position:relative;height:160px;display:flex;align-items:center;justify-content:center}
-    video{width:100%;height:100%;object-fit:cover;display:block}
-    .label{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,0.45);color:#fff;padding:4px 8px;border-radius:6px;font-size:12px}
-    .meta{position:absolute;right:8px;top:8px;background:rgba(0,0,0,0.45);color:#fff;padding:4px 8px;border-radius:6px;font-size:11px}
-    .local .label{background:rgba(15,23,42,.6)}
-    .chat{margin-top:18px;background:#fff;border-radius:10px;padding:12px;box-shadow:0 6px 18px rgba(2,6,23,.06)}
-    #messages{height:200px;overflow:auto;border-radius:8px;padding:8px;background:#f8fafc;border:1px solid #eef2ff}
-    .msg{padding:6px 10px;border-radius:8px;margin:6px 0;display:inline-block;max-width:80%}
-    .me{background:var(--accent);color:#fff;float:right}
-    .peer{background:#eef2ff;color:#000;float:left}
-    .small{font-size:13px;color:var(--muted)}
-    .notice{ position:fixed; right:16px; top:16px; background:rgba(0,0,0,0.75); color:#fff; padding:10px 14px; border-radius:10px; z-index:1200; font-size:13px; }
-    #membersList{margin-left:8px}
-    @media (max-width:600px){.tile{height:140px}}
+    .stage{
+      display:grid;
+      grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+      gap:10px;
+      align-items:start;
+    }
+
+    /* Tile */
+    .tile{background:#000;border-radius:10px;overflow:hidden;position:relative;height:180px;display:flex;align-items:center;justify-content:center}
+    .tile.fullscreen-share{ grid-column: 1 / -1; height: 62vh; } /* when someone shares screen, make tile large */
+    video{width:100%;height:100%;display:block;object-fit:cover} /* default: cover — keeps face visible */
+    /* when we want to show full shared screen (fit entire screen), use contain */
+    .tile.screen video{ object-fit: contain !important; background:#000; }
+
+    .label{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;padding:6px;border-radius:8px;font-size:13px}
+    .meta{position:absolute;right:8px;top:8px;background:rgba(0,0,0,.45);color:#fff;padding:4px 8px;border-radius:8px;font-size:12px}
+    .chat{margin-top:12px;background:rgba(255,255,255,0.03);padding:10px;border-radius:8px}
+    #messages{height:180px;overflow:auto;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02)}
+    .toast{position:fixed;right:16px;top:16px;background:rgba(0,0,0,.7);color:#fff;padding:10px;border-radius:8px}
+    .controls-right{margin-left:auto;display:flex;gap:10px;align-items:center}
+    @media (max-width:700px){
+      .tile.fullscreen-share{ height:55vh; }
+      video{ object-fit:cover; } /* mobile keep cover */
+    }
   </style>
 </head>
 <body>
-  <div class="app">
-    <header>
-      <div>
-        <h1>🎥 AI Video Call + 💬 Chat</h1>
-        <div class="small">Client detects device/timezone. Server will show who is likely from US.</div>
-      </div>
-      <div class="small">Socket ID: <span id="sid">-</span></div>
-    </header>
-
-    <div class="controls">
-      <label>Name: <input id="name" placeholder="Your name" /></label>
-      <label>Room: <input id="room" value="testroom" /></label>
-      <button id="joinBtn">Join Room</button>
-      <button id="startCallBtn" disabled>Start Call</button>
-      <button id="hangupBtn" disabled class="ghost">Leave</button>
-
-      <div style="width:1px;background:#e6edf3;margin:0 6px; height:28px"></div>
-
-      <button id="audioBtn" disabled>Mute</button>
-      <button id="camBtn" disabled>Cam Off</button>
-      <button id="flipBtn" disabled>Flip Camera</button>
-      <button id="screenBtn" disabled>Share Screen</button>
-
-      <div id="membersList" class="small">Participants: <span id="count">0</span></div>
-    </div>
-
-    <div class="stage" id="stage"></div>
-
-    <div class="chat">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <h3 style="margin:0">💬 Chat</h3>
-        <div class="small">Active: <span id="count2">0</span></div>
-      </div>
-      <div id="messages"></div>
-      <div style="margin-top:8px; display:flex; gap:8px;">
-        <input id="chatInput" placeholder="Type message..." style="flex:1" />
-        <button id="sendBtn">Send</button>
-      </div>
-    </div>
+  <div class="top">
+    <input id="name" placeholder="Your name" />
+    <input id="room" value="testroom" />
+    <button id="joinBtn">Join</button>
+    <button id="startCallBtn" disabled>Start Call</button>
+    <button id="leaveBtn" disabled class="ghost">Leave</button>
+    <button id="muteBtn" disabled>Mute</button>
+    <button id="camBtn" disabled>Cam Off</button>
+    <button id="flipBtn" disabled>Flip</button>
+    <button id="shareBtn" disabled>Share</button>
+    <div class="controls-right">Socket: <span id="sid">-</span></div>
   </div>
 
-  <div id="noticeContainer"></div>
+  <div class="stage" id="stage"></div>
+
+  <div class="chat">
+    <strong>Chat</strong>
+    <div id="messages"></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <input id="chatInput" placeholder="Message..." style="flex:1" />
+      <button id="sendBtn">Send</button>
+    </div>
+    <div id="memberList" style="margin-top:8px;color:#cbd5e1">Participants: <span id="count">0</span></div>
+  </div>
+
+  <div id="toastArea"></div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const socket = io();
-    const sidSpan = document.getElementById('sid');
-    const nameInput = document.getElementById('name');
-    const roomInput = document.getElementById('room');
+    // ======= CONFIG =======
+    const socket = io(); // same-origin
+    const STUN = { urls: 'stun:stun.l.google.com:19302' };
+
+    // ======= UI refs =======
+    const sidEl = document.getElementById('sid');
+    const nameEl = document.getElementById('name');
+    const roomEl = document.getElementById('room');
     const joinBtn = document.getElementById('joinBtn');
     const startCallBtn = document.getElementById('startCallBtn');
-    const hangupBtn = document.getElementById('hangupBtn');
-    const audioBtn = document.getElementById('audioBtn');
+    const leaveBtn = document.getElementById('leaveBtn');
+    const muteBtn = document.getElementById('muteBtn');
     const camBtn = document.getElementById('camBtn');
     const flipBtn = document.getElementById('flipBtn');
-    const screenBtn = document.getElementById('screenBtn');
+    const shareBtn = document.getElementById('shareBtn');
     const stage = document.getElementById('stage');
     const messagesDiv = document.getElementById('messages');
     const chatInput = document.getElementById('chatInput');
     const sendBtn = document.getElementById('sendBtn');
     const countSpan = document.getElementById('count');
-    const countSpan2 = document.getElementById('count2');
-    const membersList = document.getElementById('membersList');
+    const toastArea = document.getElementById('toastArea');
 
-    let localStream = null, cameraTrack = null, audioEnabled = true;
-    let screenStream = null, isSharingScreen = false;
-    let currentDeviceId = null;
-    let peers = {}; // peerId -> { pc, videoSender, audioSender, el, videoEl, name, meta }
+    // ======= State =======
+    let localStream = null;
+    let screenStream = null;
+    let cameraTrack = null;
+    let audioEnabled = true;
+    let isSharing = false;
+    let peers = {}; // id -> { pc, name, videoSender, audioSender }
     let room = null;
     let callStarted = false;
-    const STUN = { urls: 'stun:stun.l.google.com:19302' };
+    let isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent || '');
 
-    // helper: show notice
-    function showNotice(text, ttl = 2500){
-      const el = document.createElement('div');
-      el.className = 'notice';
-      el.textContent = text;
-      document.body.appendChild(el);
-      setTimeout(()=> el.remove(), ttl);
+    // ======= Helpers =======
+    function toast(txt, ttl=1800){
+      const d = document.createElement('div'); d.className='toast'; d.textContent = txt; toastArea.appendChild(d);
+      setTimeout(()=>d.remove(), ttl);
     }
 
-    // detect client meta
-    function detectClientMeta() {
-      const ua = navigator.userAgent || '';
-      const isMobile = /Mobi|Android|iPhone|iPad|iPod|Mobile/i.test(ua);
-      const platform = navigator.platform || '';
-      const language = navigator.language || navigator.userLanguage || '';
-      let timezone = 'unknown';
-      try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || timezone; } catch(e){}
-      let countryGuess = null;
-      if (language && language.toLowerCase().includes('en-us')) countryGuess = 'US';
-      if (timezone && timezone.toLowerCase().includes('america')) countryGuess = 'US';
-      const deviceType = isMobile ? 'mobile' : 'desktop';
-      return { isMobile, deviceType, platform, language, timezone, countryGuess, userAgent: ua };
+    function createTile(id, label, options = {}) {
+      // options: { isLocal: bool, isScreen: bool }
+      if(document.getElementById('tile-'+id)) return document.getElementById('tile-'+id);
+      const div = document.createElement('div'); div.className='tile'; div.id='tile-'+id;
+      if(options.isScreen) div.classList.add('screen'); // apply contain later
+      const v = document.createElement('video'); v.id='video-'+id; v.autoplay=true; v.playsInline=true; if(options.isLocal) v.muted=true;
+      // add constraints for better mobile face framing via CSS object-fit; we'll use object-fit:cover by default
+      const lab = document.createElement('div'); lab.className='label'; lab.textContent = label;
+      div.appendChild(v); div.appendChild(lab); stage.appendChild(div);
+      return div;
     }
 
-    function createTile(id, label, meta = {}, isLocal=false){
-      const wrapper = document.createElement('div');
-      wrapper.className = 'tile ' + (isLocal ? 'local' : '');
-      wrapper.id = 'tile-' + id;
-      const v = document.createElement('video'); v.autoplay = true; v.playsInline = true; v.id = 'video-' + id;
-      if(isLocal) { v.muted = true; v.style.transform = 'scaleX(-1)'; }
-      const lab = document.createElement('div'); lab.className = 'label'; lab.textContent = label;
-      const metaEl = document.createElement('div'); metaEl.className = 'meta';
-      const badges = [];
-      if(meta && meta.countryGuess === 'US') badges.push('🇺🇸 US');
-      if(meta && meta.deviceType) badges.push(meta.deviceType);
-      metaEl.textContent = badges.join(' • ');
-      wrapper.appendChild(v); wrapper.appendChild(lab); wrapper.appendChild(metaEl);
-      return { wrapper, videoEl: v, labelEl: lab, metaEl };
+    function setTileFullscreenForShare(sharerId) {
+      // remove fullscreen-share from all
+      document.querySelectorAll('.tile.fullscreen-share').forEach(el=>el.classList.remove('fullscreen-share'));
+      if(!sharerId) return;
+      const tile = document.getElementById('tile-'+sharerId);
+      if(tile) tile.classList.add('fullscreen-share');
     }
 
-    function updateCountsUI(membersArray){
-      const count = membersArray ? membersArray.length : (Object.keys(peers).length || 0);
-      countSpan.textContent = count;
-      countSpan2.textContent = count;
-      // render simple members list text
-      if(Array.isArray(membersArray)){
-        const names = membersArray.map(m => m.name || 'Anonymous');
-        membersList.innerHTML = 'Participants: ' + names.join(', ');
-      } else {
-        membersList.innerHTML = 'Participants: ' + (Object.keys(peers).map(id => peers[id].name || 'Someone').join(', ') || '0');
-      }
+    function removeTile(id){
+      const el = document.getElementById('tile-'+id);
+      if(el) el.remove();
     }
 
-    function showLocal(name, meta){
-      const id = socket.id || 'local';
-      if(document.getElementById('tile-'+id)) return;
-      const { wrapper, videoEl, labelEl, metaEl } = createTile(id, name + ' (You)', meta, true);
-      stage.prepend(wrapper);
-      if(localStream) videoEl.srcObject = localStream;
-      peers[id] = peers[id] || {};
-      peers[id].el = wrapper; peers[id].videoEl = videoEl; peers[id].name = name; peers[id].meta = meta;
-      updateCountsUI();
+    function updateMemberList(members){
+      const list = Array.isArray(members) ? members.map(m=>m.name||'Anonymous') : Object.values(peers).map(p=>p.name || 'User');
+      countSpan.textContent = list.length;
+      const memberListEl = document.getElementById('memberList');
+      memberListEl.textContent = 'Participants: ' + (list.length ? list.join(', ') : '0');
     }
 
-    function addRemote(id, name='Peer', meta = {}) {
-      if(document.getElementById('tile-'+id)) {
-        const lbl = document.querySelector('#tile-' + id + ' .label');
-        const metaEl = document.querySelector('#tile-' + id + ' .meta');
-        if(lbl) lbl.textContent = name;
-        if(metaEl){
-          const badges = [];
-          if(meta && meta.countryGuess === 'US') badges.push('🇺🇸 US');
-          if(meta && meta.deviceType) badges.push(meta.deviceType);
-          metaEl.textContent = badges.join(' • ');
-        }
-        peers[id] = peers[id] || {};
-        peers[id].name = name; peers[id].meta = meta;
-        updateCountsUI();
-        return;
-      }
-      const { wrapper, videoEl, labelEl, metaEl } = createTile(id, name || 'Peer', meta, false);
-      stage.appendChild(wrapper);
-      peers[id] = peers[id] || {};
-      peers[id].el = wrapper; peers[id].videoEl = videoEl; peers[id].name = name; peers[id].meta = meta;
-      updateCountsUI();
+    function appendMessage(txt){
+      const d = document.createElement('div'); d.textContent = txt; messagesDiv.appendChild(d); messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
-    function removePeer(id){
-      if(peers[id]){
-        try{ if(peers[id].pc) peers[id].pc.close(); }catch(e){}
-        if(peers[id].el) peers[id].el.remove();
-        delete peers[id];
-      }
-      updateCountsUI();
-    }
+    // ======= socket handlers =======
+    socket.on('connect', ()=>{ sidEl.textContent = socket.id; });
 
-    function applyAudioState(){
-      audioEnabled = !!audioEnabled;
-      if(localStream){
-        localStream.getAudioTracks().forEach(t => {
-          try{ t.enabled = audioEnabled; } catch(e){/*ignore*/ }
-        });
-      }
-      audioBtn.textContent = audioEnabled ? 'Mute' : 'Unmute';
-    }
+    socket.on('require-name', ({message}) => { toast(message || 'Name required'); joinBtn.disabled = false; });
 
-    function cameraConstraintsForMeta(meta) {
-      const desktop = { video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true };
-      const mobile = { video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: true };
-      if (!meta) return desktop;
-      if (meta.isMobile) return mobile;
-      if (window.screen && Math.min(window.screen.width, window.screen.height) < 700) return mobile;
-      return desktop;
-    }
-
-    // ===== NEW: require name on client before join =====
-    joinBtn.onclick = async () => {
-      const rawName = (nameInput.value || '').trim();
-      if (!rawName) {
-        showNotice('कृपया अपना नाम दर्ज करें ताकि आप जुड़ सकें', 3000);
-        nameInput.focus();
-        return;
-      }
-
-      room = roomInput.value.trim();
-      if(!room) {
-        showNotice('Enter a room name', 2500);
-        roomInput.focus();
-        return;
-      }
-
-      joinBtn.disabled = true;
-      try {
-        const meta = detectClientMeta();
-        const constraints = cameraConstraintsForMeta(meta);
-
-        // request media only after name validation
-        localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        cameraTrack = localStream.getVideoTracks()[0];
-        currentDeviceId = cameraTrack ? (cameraTrack.getSettings().deviceId || null) : null;
-
-        // preserve audioEnabled state (default true)
-        audioEnabled = localStream.getAudioTracks().length ? localStream.getAudioTracks()[0].enabled : audioEnabled;
-        applyAudioState();
-
-        // show local preview and enable controls
-        showLocal(rawName, meta);
-        audioBtn.disabled = false; camBtn.disabled = false; flipBtn.disabled = false; screenBtn.disabled = false;
-        startCallBtn.disabled = false; hangupBtn.disabled = true;
-
-        // emit join with clientMeta and name
-        socket.emit('join', { room, name: rawName, clientMeta: meta });
-      } catch (e) {
-        alert('Camera/Mic error: ' + e.message);
-        joinBtn.disabled = false;
-      }
-    };
-
-    // socket handlers
-    socket.on('connect', ()=>{ sidSpan.textContent = socket.id; });
-
-    // server enforced: require-name
-    socket.on('require-name', ({ message }) => {
-      showNotice(message || 'Please provide a name to join', 3500);
-      joinBtn.disabled = false;
-      nameInput.focus();
-    });
-
-    // structured existing peers
-    socket.on('existingPeers', list=>{
+    socket.on('existingPeers', list => {
       (list || []).forEach(p => {
         if(p.id === socket.id) return;
-        addRemote(p.id, p.name, p.meta || {});
-        if(callStarted) initPeer(p.id, true).catch(e=>console.warn(e));
+        peers[p.id] = peers[p.id] || {}; peers[p.id].name = p.name || 'Peer';
+        createTile(p.id, p.name || 'Peer');
       });
+      updateMemberList(list);
     });
 
-    socket.on('peer-joined', async ({id, name, meta})=>{
+    socket.on('peer-joined', ({id, name, meta}) => {
       if(id === socket.id) return;
-      addRemote(id, name, meta || {});
-      showNotice(`${name || 'Peer'} joined ${(meta && meta.countryGuess) ? '('+meta.countryGuess+')' : ''}`);
+      peers[id] = peers[id] || {}; peers[id].name = name || 'Peer'; peers[id].meta = meta || {};
+      createTile(id, peers[id].name);
+      toast((name||'Peer') + ' joined');
+      updateMemberList();
       if(callStarted) initPeer(id, true).catch(e=>console.warn(e));
     });
 
     socket.on('peer-left', ({id, name})=>{
-      showNotice(`${name || 'Peer'} left`);
-      removePeer(id);
+      removeTile(id);
+      if(peers[id] && peers[id].pc){ try{ peers[id].pc.close(); }catch(e){} }
+      delete peers[id];
+      toast((name||'Peer') + ' left');
+      updateMemberList();
     });
 
-    // roomMembers: payload { members: [{id,name,meta}], count }
     socket.on('roomMembers', payload => {
-      const members = (payload && payload.members) ? payload.members : (Array.isArray(payload) ? payload : []);
-      members.forEach(m => {
-        if(m.id === socket.id){
-          showLocal(m.name || (nameInput.value || 'You'), m.meta || {});
-        } else {
-          addRemote(m.id, m.name, m.meta || {});
-        }
+      const members = (payload && payload.members) ? payload.members : [];
+      members.forEach(m=>{
+        if(m.id === socket.id) return;
+        peers[m.id] = peers[m.id] || {}; peers[m.id].name = m.name || 'Peer'; peers[m.id].meta = m.meta || {};
+        createTile(m.id, peers[m.id].name);
       });
-      // remove peers not present
-      const memberIds = new Set(members.map(m => m.id));
-      Object.keys(peers).forEach(id => {
-        if(id !== socket.id && !memberIds.has(id)) removePeer(id);
-      });
-      updateCountsUI(members);
+      // remove stale
+      const memberIds = new Set(members.map(m=>m.id));
+      Object.keys(peers).forEach(id=>{ if(id !== socket.id && !memberIds.has(id)){ removeTile(id); delete peers[id]; }});
+      updateMemberList(members);
     });
 
-    socket.on('roomDelta', delta => {
+    // handle screenShare notifications (server emits screenShare)
+    socket.on('screenShare', ({ active, from }) => {
+      // active: boolean, from: socketId
+      if(active) {
+        // mark tile as screen and expand it
+        document.querySelectorAll('.tile').forEach(t=> t.classList.remove('screen'));
+        const tile = document.getElementById('tile-'+from);
+        if(tile) tile.classList.add('screen');
+        setTileFullscreenForShare(from);
+        toast('Screen shared by ' + (peers[from] && peers[from].name ? peers[from].name : 'Someone'));
+      } else {
+        // remove screen classes
+        document.querySelectorAll('.tile.screen').forEach(t=> t.classList.remove('screen'));
+        setTileFullscreenForShare(null);
+        toast('Screen sharing stopped');
+      }
+    });
+
+    socket.on('roomDelta', delta=>{
       if(!delta) return;
-      if(delta.joined && delta.joined.length){
-        const names = delta.joined.map(x => x.name || 'Someone');
-        showNotice('Joined: ' + names.join(', '));
-        delta.joined.forEach(j => addRemote(j.id, j.name, j.meta || {}));
-      }
-      if(delta.left && delta.left.length){
-        const names = delta.left.map(x => x.name || 'Someone');
-        showNotice('Left: ' + names.join(', '));
-        delta.left.forEach(l => removePeer(l.id));
-      }
+      if(delta.joined && delta.joined.length) delta.joined.forEach(j=>{ peers[j.id] = peers[j.id] || {}; peers[j.id].name = j.name || 'Peer'; createTile(j.id, peers[j.id].name); });
+      if(delta.left && delta.left.length) delta.left.forEach(l=>{ removeTile(l.id); delete peers[l.id]; });
+      updateMemberList();
     });
 
-    // chat
-    sendBtn.onclick=()=>{
-      const text = chatInput.value.trim(); if(!text) return;
-      const name = (nameInput.value || '').trim() || 'Anonymous';
-      socket.emit('chatMessage', { room, text });
-      appendMsg('me', name + ': ' + text);
-      chatInput.value = '';
-    };
-    socket.on('chatMessage', ({ from, name, text })=>{
-      appendMsg('peer', (name || 'Peer') + ': ' + text);
+    socket.on('chatMessage', ({from, name, text})=>{
+      appendMessage((name||'Peer') + ': ' + text);
     });
 
-    function appendMsg(kind, text){
-      const d=document.createElement('div'); d.className='msg '+(kind==='me'?'me':'peer'); d.textContent=text;
-      messagesDiv.appendChild(d); messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-
-    // initPeer: create RTCPeerConnection and add tracks
-    async function initPeer(id, isInitiator){
-      if(peers[id] && peers[id].pc) return peers[id].pc;
-      addRemote(id, peers[id] && peers[id].name ? peers[id].name : 'Peer', peers[id] && peers[id].meta ? peers[id].meta : {});
-      const pc = new RTCPeerConnection({ iceServers: [STUN] });
-      peers[id] = peers[id] || {};
-      peers[id].pc = pc;
-
-      pc.onicecandidate = e => { if(e.candidate) socket.emit('signal', { to: id, data: { candidate: e.candidate } }); };
-
-      pc.ontrack = e => {
-        const el = peers[id].videoEl || document.getElementById('video-'+id);
-        if(el) {
-          el.srcObject = e.streams[0];
-          el.style.transform = ''; // remote not mirrored
-        }
-      };
-
-      // add local tracks (if available). addTrack returns RTCRtpSender which we store for replaceTrack
-      if(localStream){
-        localStream.getTracks().forEach(track => {
-          try{
-            const sender = pc.addTrack(track, localStream);
-            if(track.kind === 'video') peers[id].videoSender = sender;
-            if(track.kind === 'audio') peers[id].audioSender = sender;
-          }catch(e){ console.warn('addTrack failed', e); }
-        });
-      }
-
-      if(isInitiator){
-        try{
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit('signal', { to: id, data: pc.localDescription });
-        }catch(e){ console.warn('createOffer failed', e); }
-      }
-      return pc;
-    }
-
-    // handle incoming signals from server (offer/answer/candidate)
+    // signaling relay from server
     socket.on('signal', async ({ from, data })=>{
-      try{
-        if(!from || !data) return;
-        // ensure peer exists
-        const pc = await initPeer(from, false);
+      if(!from || !data) return;
+      let pc = peers[from] && peers[from].pc;
+      if(!pc) pc = await initPeer(from, false);
+      try {
         if(data.type === 'offer'){
           await pc.setRemoteDescription(new RTCSessionDescription(data));
           const answer = await pc.createAnswer();
@@ -397,224 +232,276 @@
         } else if(data.type === 'answer'){
           await pc.setRemoteDescription(new RTCSessionDescription(data));
         } else if(data.candidate){
-          await pc.addIceCandidate(data.candidate);
+          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
         }
-      }catch(e){ console.warn('signal handling failed', e); }
+      } catch (err) { console.warn('signal handling failed', err); }
     });
 
-    // START CALL
-    startCallBtn.onclick = async ()=>{
-      if(!room) return alert('Join a room first');
-      if(callStarted) return;
-      callStarted = true;
-      startCallBtn.disabled = true;
-      hangupBtn.disabled = false;
-      const otherIds = Object.keys(peers).filter(id => id !== socket.id);
-      for(const id of otherIds){
-        try{ await initPeer(id, true); }catch(e){ console.warn('start call init failed', e); }
+    // ======= join flow =======
+    joinBtn.onclick = async () => {
+      const name = (nameEl.value || '').trim();
+      const r = (roomEl.value || '').trim();
+      if(!name || !r){ toast('Enter name & room'); return; }
+      joinBtn.disabled = true;
+      try {
+        // choose constraints depending on device to improve framing
+        const constraints = isMobile
+          ? { video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: 'user', aspectRatio: { ideal: 9/16 } }, audio: true }
+          : { video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user', aspectRatio: { ideal: 16/9 } }, audio: true };
+
+        localStream = await navigator.mediaDevices.getUserMedia(constraints);
+        cameraTrack = localStream.getVideoTracks()[0];
+        audioEnabled = localStream.getAudioTracks().length ? localStream.getAudioTracks()[0].enabled : true;
+
+        // show local preview
+        createTile(socket.id, name + ' (You)', { isLocal: true });
+        const localVid = document.getElementById('video-'+socket.id);
+        if(localVid) {
+          localVid.srcObject = localStream;
+          // mobile: make sure self view isn't distorted — keep object-fit: cover so face is centered
+          localVid.style.objectFit = 'cover';
+          // don't mirror on mobile remote, but mirror self-view for naturalness:
+          if(!isMobile) localVid.style.transform = 'scaleX(-1)';
+          else localVid.style.transform = ''; // mobile front camera typically shows correctly
+        }
+
+        // enable controls
+        startCallBtn.disabled = false; leaveBtn.disabled = false; muteBtn.disabled = false; camBtn.disabled = false; flipBtn.disabled = false; shareBtn.disabled = false;
+
+        room = r;
+        socket.emit('join', { room, name, clientMeta: detectMeta() });
+      } catch (err) {
+        toast('Camera/Mic error: ' + (err && err.message ? err.message : err));
+        joinBtn.disabled = false;
       }
-      showNotice('Call started');
     };
 
-    // LEAVE
-    hangupBtn.onclick = ()=>{
+    // ======= WebRTC helpers =======
+    async function initPeer(id, isInitiator){
+      if(peers[id] && peers[id].pc) return peers[id].pc;
+      const pc = new RTCPeerConnection({ iceServers: [STUN] });
+      peers[id] = peers[id] || {};
+      peers[id].pc = pc;
+
+      // add current local tracks
+      if(localStream){
+        localStream.getTracks().forEach(track => {
+          try {
+            const sender = pc.addTrack(track, localStream);
+            if(track.kind === 'video') peers[id].videoSender = sender;
+            if(track.kind === 'audio') peers[id].audioSender = sender;
+          } catch(e) { console.warn('addTrack failed', e); }
+        });
+      }
+
+      pc.onicecandidate = e => { if(e.candidate) socket.emit('signal', { to: id, data: { candidate: e.candidate } }); };
+
+      pc.ontrack = e => {
+        // remote stream received
+        createTile(id, peers[id].name || 'Peer');
+        const remoteVid = document.getElementById('video-'+id);
+        if(remoteVid) {
+          remoteVid.srcObject = e.streams[0];
+          // if the stream contains a display (screen) it will often be landscape/wide: prefer contain
+          // but we prefer server's screenShare event to mark it. If this tile already has .screen class, use contain:
+          const tile = document.getElementById('tile-'+id);
+          if(tile && tile.classList.contains('screen')) {
+            remoteVid.style.objectFit = 'contain';
+          } else {
+            remoteVid.style.objectFit = 'cover';
+          }
+          remoteVid.style.transform = ''; // remote shouldn't be mirrored
+        }
+      };
+
+      // create offer if initiator
+      if(isInitiator){
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          socket.emit('signal', { to: id, data: pc.localDescription });
+        } catch(e) { console.warn('offer failed', e); }
+      }
+      return pc;
+    }
+
+    // ======= start call =======
+    startCallBtn.onclick = async () => {
+      if(!room) return toast('Join a room first');
+      callStarted = true;
+      startCallBtn.disabled = true;
+      const otherIds = Object.keys(peers).filter(id => id !== socket.id);
+      for(const id of otherIds) { try { await initPeer(id, true); } catch(e){ console.warn(e); } }
+      toast('Call started');
+    };
+
+    // ======= leave =======
+    leaveBtn.onclick = () => {
       socket.emit('leave');
-      Object.keys(peers).forEach(id=>{
-        if(peers[id] && peers[id].pc) { try{ peers[id].pc.close(); }catch(e){} }
-        const tile = document.getElementById('tile-'+id); if(tile) tile.remove();
+      Object.keys(peers).forEach(id => {
+        if(peers[id].pc) try{ peers[id].pc.close(); }catch(e){}
+        removeTile(id);
       });
       peers = {};
       callStarted = false;
-      if(localStream){
-        localStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
-        localStream = null; cameraTrack = null;
-      }
-      if(screenStream){
-        screenStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
-        screenStream = null; isSharingScreen = false;
-      }
-      joinBtn.disabled = false; startCallBtn.disabled = true; hangupBtn.disabled = true;
-      audioBtn.disabled = true; camBtn.disabled = true; flipBtn.disabled = true; screenBtn.disabled = true;
-      updateCountsUI([]);
-      showNotice('Left room');
+      if(localStream) localStream.getTracks().forEach(t => { try{ t.stop(); }catch(e){} });
+      if(screenStream) screenStream.getTracks().forEach(t => { try{ t.stop(); }catch(e){} });
+      localStream = null; screenStream = null; cameraTrack = null;
+      joinBtn.disabled = false; startCallBtn.disabled = true; leaveBtn.disabled = true; muteBtn.disabled = true; camBtn.disabled = true; flipBtn.disabled = true; shareBtn.disabled = true;
+      document.querySelectorAll('[id^="tile-"]').forEach(el => el.remove());
+      toast('Left room');
     };
 
-    // AUDIO toggle
-    audioBtn.onclick = ()=>{
-      if(!localStream) return alert('Join room and allow microphone first');
-      const audioTracks = localStream.getAudioTracks();
-      if(!audioTracks || audioTracks.length === 0) return alert('No audio track available');
+    // ======= mute / cam toggle =======
+    muteBtn.onclick = () => {
+      if(!localStream) return toast('Join first');
       audioEnabled = !audioEnabled;
-      applyAudioState();
-      // also ensure senders (peers) reflect the state (no change required normally, but keep consistent)
+      localStream.getAudioTracks().forEach(t => t.enabled = audioEnabled);
+      muteBtn.textContent = audioEnabled ? 'Mute' : 'Unmute';
       Object.values(peers).forEach(p => {
-        if(p.audioSender && p.audioSender.track) {
-          try{ p.audioSender.track.enabled = audioEnabled; } catch(e){}
-        }
+        if(p.audioSender && p.audioSender.track) try{ p.audioSender.track.enabled = audioEnabled; } catch(e){}
       });
     };
 
-    // CAM toggle (hide/show)
-    camBtn.onclick = ()=>{
-      if(!localStream) return alert('Join room and allow camera first');
+    camBtn.onclick = () => {
+      if(!localStream) return toast('Join first');
       const videoTracks = localStream.getVideoTracks();
-      if(!videoTracks || videoTracks.length === 0) return alert('No video track available');
+      if(!videoTracks || videoTracks.length === 0) return toast('No camera track');
       const enabled = videoTracks[0].enabled;
       videoTracks.forEach(t => t.enabled = !enabled);
       camBtn.textContent = enabled ? 'Cam On' : 'Cam Off';
     };
 
-    // Flip camera (preserve audio state)
-    flipBtn.onclick = async ()=>{
-      try{
-        if(!localStream) return alert('Join room and allow camera first');
+    // ======= flip camera (mobile) =======
+    flipBtn.onclick = async () => {
+      try {
+        if(!localStream) return toast('Join first');
         const devices = await navigator.mediaDevices.enumerateDevices();
         const vids = devices.filter(d => d.kind === 'videoinput');
-        if(vids.length < 2) return alert('No second camera found');
-
-        let idx = vids.findIndex(v => v.deviceId === currentDeviceId);
+        if(vids.length < 2) return toast('No second camera found');
+        const currentId = cameraTrack && cameraTrack.getSettings && cameraTrack.getSettings().deviceId;
+        let idx = vids.findIndex(v => v.deviceId === currentId);
         idx = (idx + 1) % vids.length;
         const nextId = vids[idx].deviceId;
-
-        if(isSharingScreen){
-          alert('Stop screen sharing to flip camera.');
-          return;
+        const newCam = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nextId }, facingMode: 'user' }, audio: false });
+        const newTrack = newCam.getVideoTracks()[0];
+        // replace track in localStream
+        if(cameraTrack) {
+          try { localStream.removeTrack(cameraTrack); } catch(e){}
+          try { cameraTrack.stop(); } catch(e){}
         }
-
-        // Request only the new video track (audio:false), preserve localStream's audio tracks
-        const newCamStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nextId } }, audio: false });
-        const newTrack = newCamStream.getVideoTracks()[0];
-        if(!newTrack) throw new Error('No video track from new camera');
-
-        // stop previous video track but keep audio tracks intact
-        if(cameraTrack){
-          try{ localStream.removeTrack(cameraTrack); }catch(e){}
-          try{ cameraTrack.stop(); }catch(e){}
-        }
-
         localStream.addTrack(newTrack);
         cameraTrack = newTrack;
-        currentDeviceId = nextId;
-
-        const localVid = document.getElementById('video-'+socket.id);
-        if(localVid) localVid.srcObject = localStream;
-
-        // replace track on existing peer senders (preferred)
+        // replace on senders
         Object.values(peers).forEach(async p => {
           if(p.videoSender && p.videoSender.replaceTrack) {
-            try{ await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
-          } else if(p && p.pc) {
-            try{
-              p.pc.getSenders().forEach(s => {
-                if(s.track && s.track.kind === 'video') { try{ p.pc.removeTrack(s); }catch(e){} }
-              });
-              const sender = p.pc.addTrack(cameraTrack, localStream);
-              p.videoSender = sender;
-            }catch(e){ console.warn('fallback replace failed', e); }
+            try { await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+          } else if(p.pc) {
+            try {
+              p.pc.getSenders().forEach(s => { if(s.track && s.track.kind === 'video') try{ p.pc.removeTrack(s); }catch(e){} });
+              const snd = p.pc.addTrack(cameraTrack, localStream);
+              p.videoSender = snd;
+            } catch(e){ console.warn('fallback addTrack failed', e); }
           }
         });
-
-        // keep audio state consistent
-        applyAudioState();
-      }catch(e){ alert('Flip failed: '+e.message); }
+        const myVid = document.getElementById('video-'+socket.id);
+        if(myVid) myVid.srcObject = localStream;
+      } catch (e) { toast('Flip failed: ' + (e && e.message ? e.message : e)); }
     };
 
-    // SCREEN SHARE toggle (preserve audio)
-    screenBtn.onclick = async ()=>{
-      if(!localStream) return alert('Join room and allow camera first');
-
-      if(!isSharingScreen){
-        try{
-          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    // ======= screen share (fullscreen-friendly) =======
+    shareBtn.onclick = async () => {
+      if(!localStream) return toast('Join first');
+      if(!isSharing) {
+        try {
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: false });
           const screenTrack = screenStream.getVideoTracks()[0];
-          if(!screenTrack) throw new Error('No screen track');
-
           screenTrack.onended = () => { stopScreenShare(); };
-
-          // remove camera video track but keep audio tracks
-          if(cameraTrack){
-            try{ localStream.removeTrack(cameraTrack); }catch(e){}
-            try{ cameraTrack.stop(); }catch(e){}
-          }
-
+          // replace camera video track in localStream (keep audio)
+          if(cameraTrack) { try { localStream.removeTrack(cameraTrack); }catch(e){} try{ cameraTrack.stop(); }catch(e){} }
           localStream.addTrack(screenTrack);
-          isSharingScreen = true;
-
-          const localVid = document.getElementById('video-'+socket.id);
-          if(localVid){ localVid.srcObject = localStream; localVid.style.transform = 'none'; }
-
+          cameraTrack = screenTrack;
+          // replace on all peer senders
           Object.values(peers).forEach(async p => {
             if(p.videoSender && p.videoSender.replaceTrack) {
-              try{ await p.videoSender.replaceTrack(screenTrack); } catch(e){ console.warn('replaceTrack failed', e); }
-            } else if(p && p.pc) {
-              try{
-                p.pc.getSenders().forEach(s => {
-                  if(s.track && s.track.kind === 'video') { try{ p.pc.removeTrack(s); }catch(e){} }
-                });
-                const sender = p.pc.addTrack(screenTrack, localStream);
-                p.videoSender = sender;
-              }catch(e){ console.warn('fallback replace failed', e); }
+              try { await p.videoSender.replaceTrack(screenTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+            } else if(p.pc) {
+              try {
+                p.pc.getSenders().forEach(s => { if(s.track && s.track.kind === 'video') try{ p.pc.removeTrack(s); }catch(e){} });
+                const snd = p.pc.addTrack(screenTrack, localStream);
+                p.videoSender = snd;
+              } catch(e){ console.warn('fallback addTrack failed', e); }
             }
           });
-
-          screenBtn.textContent = 'Stop Sharing';
-          // ensure audio state persists
-          applyAudioState();
-
-        } catch(e){ alert('Screen share failed: '+e.message); }
+          // mark local tile as screen
+          const myTile = document.getElementById('tile-'+socket.id) || createTile(socket.id, (nameEl.value||'You') + ' (You)', { isLocal:true });
+          myTile.classList.add('screen');
+          // notify server so others can layout properly
+          socket.emit('screenShare', { active: true, from: socket.id });
+          isSharing = true;
+          shareBtn.textContent = 'Stop';
+          // update local preview
+          const v = document.getElementById('video-'+socket.id); if(v) { v.srcObject = localStream; v.style.objectFit = 'contain'; v.style.transform = ''; }
+        } catch(e) { toast('Screen share failed: ' + (e && e.message ? e.message : e)); }
       } else {
         stopScreenShare();
       }
     };
 
     async function stopScreenShare(){
-      if(!isSharingScreen) return;
-      try{
-        if(screenStream) screenStream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
+      if(!isSharing) return;
+      try {
+        if(screenStream) screenStream.getTracks().forEach(t => { try{ t.stop(); }catch(e){} });
         screenStream = null;
-
-        // get camera track again (request audio:false to avoid creating duplicate audio tracks)
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        const newCamTrack = camStream.getVideoTracks()[0];
-        if(!newCamTrack) throw new Error('Could not get camera after screen share');
-
-        // remove any video tracks left in localStream (these are screen tracks)
-        localStream.getVideoTracks().forEach(t => {
-          try{ localStream.removeTrack(t); }catch(e){}
-          try{ t.stop(); }catch(e){}
-        });
-
-        localStream.addTrack(newCamTrack);
-        cameraTrack = newCamTrack;
-        isSharingScreen = false;
-
-        const localVid = document.getElementById('video-'+socket.id);
-        if(localVid){ localVid.srcObject = localStream; localVid.style.transform = 'scaleX(-1)'; }
-
+        // reacquire camera (only video to avoid duplicate audio)
+        try {
+          const cam = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          const newTrack = cam.getVideoTracks()[0];
+          // remove any remaining video tracks
+          localStream.getVideoTracks().forEach(t => { try{ localStream.removeTrack(t); }catch(e){} });
+          localStream.addTrack(newTrack);
+          cameraTrack = newTrack;
+        } catch(e) { console.warn('could not reacquire camera', e); }
+        // replace senders
         Object.values(peers).forEach(async p => {
           if(p.videoSender && p.videoSender.replaceTrack) {
-            try{ await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
-          } else if(p && p.pc) {
-            try{
-              p.pc.getSenders().forEach(s => {
-                if(s.track && s.track.kind === 'video') { try{ p.pc.removeTrack(s); }catch(e){} }
-              });
-              const sender = p.pc.addTrack(cameraTrack, localStream);
-              p.videoSender = sender;
-            }catch(e){ console.warn('fallback replace failed', e); }
+            try { await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+          } else if(p.pc) {
+            try {
+              p.pc.getSenders().forEach(s => { if(s.track && s.track.kind === 'video') try{ p.pc.removeTrack(s); }catch(e){} });
+              const snd = p.pc.addTrack(cameraTrack, localStream);
+              p.videoSender = snd;
+            } catch(e){ console.warn('fallback addTrack failed', e); }
           }
         });
-
-        screenBtn.textContent = 'Share Screen';
-        applyAudioState();
-      }catch(e){
-        console.warn('stopScreenShare error', e);
-        screenBtn.textContent = 'Share Screen';
-        isSharingScreen = false;
-      }
+        // UI cleanup
+        const myTile = document.getElementById('tile-'+socket.id); if(myTile) myTile.classList.remove('screen');
+        socket.emit('screenShare', { active: false, from: socket.id });
+        isSharing = false;
+        shareBtn.textContent = 'Share';
+        const v = document.getElementById('video-'+socket.id); if(v) v.srcObject = localStream;
+      } catch(e){ console.warn('stopScreenShare error', e); isSharing=false; shareBtn.textContent='Share'; socket.emit('screenShare', { active:false, from: socket.id }); }
     }
 
-    // gracefully notify leave on tab close
+    // ======= chat =======
+    sendBtn.onclick = () => {
+      const txt = chatInput.value.trim(); if(!txt) return;
+      socket.emit('chatMessage', { room, text: txt });
+      appendMessage('You: ' + txt); chatInput.value = '';
+    };
+
+    // ======= utility meta =======
+    function detectMeta(){
+      const ua = navigator.userAgent || '';
+      const tz = (()=>{ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone }catch(e){ return 'unknown' } })();
+      let countryGuess = null;
+      const lang = (navigator.language||'').toLowerCase();
+      if(lang.includes('en-us')) countryGuess = 'US';
+      if(tz && tz.toLowerCase().includes('america')) countryGuess = 'US';
+      return { isMobile, deviceType: isMobile ? 'mobile' : 'desktop', language: navigator.language, timezone: tz, countryGuess, userAgent: ua };
+    }
+
+    // cleanup on tab close
     window.addEventListener('beforeunload', ()=>{ try{ socket.emit('leave'); }catch(e){} });
   </script>
 </body>
