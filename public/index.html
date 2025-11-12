@@ -22,9 +22,21 @@
     }
 
     /* Tile */
-    .tile{background:#000;border-radius:10px;overflow:hidden;position:relative;height:180px;display:flex;align-items:center;justify-content:center}
+    .tile{
+      background:#000;
+      border-radius:10px;
+      overflow:hidden;
+      position:relative;
+      /* use aspect ratio to prevent stretching */
+      height: auto;
+      aspect-ratio: 16 / 9;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
     .tile.fullscreen-share{ grid-column: 1 / -1; height: 62vh; } /* when someone shares screen, make tile large */
-    video{width:100%;height:100%;display:block;object-fit:cover} /* default: cover — keeps face visible */
+    /* video fills tile but keeps aspect using object-fit */
+    video{width:100%;height:100%;display:block;object-fit:cover;transform-origin:center center}
     /* when we want to show full shared screen (fit entire screen), use contain */
     .tile.screen video{ object-fit: contain !important; background:#000; }
 
@@ -36,7 +48,9 @@
     .controls-right{margin-left:auto;display:flex;gap:10px;align-items:center}
     @media (max-width:700px){
       .tile.fullscreen-share{ height:55vh; }
-      video{ object-fit:cover; } /* mobile keep cover */
+      /* mobile keep cover by default (face-centered) */
+      video{ object-fit:cover; }
+      .stage{ grid-template-columns: repeat(1, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -115,14 +129,12 @@
       const div = document.createElement('div'); div.className='tile'; div.id='tile-'+id;
       if(options.isScreen) div.classList.add('screen'); // apply contain later
       const v = document.createElement('video'); v.id='video-'+id; v.autoplay=true; v.playsInline=true; if(options.isLocal) v.muted=true;
-      // add constraints for better mobile face framing via CSS object-fit; we'll use object-fit:cover by default
       const lab = document.createElement('div'); lab.className='label'; lab.textContent = label;
       div.appendChild(v); div.appendChild(lab); stage.appendChild(div);
       return div;
     }
 
     function setTileFullscreenForShare(sharerId) {
-      // remove fullscreen-share from all
       document.querySelectorAll('.tile.fullscreen-share').forEach(el=>el.classList.remove('fullscreen-share'));
       if(!sharerId) return;
       const tile = document.getElementById('tile-'+sharerId);
@@ -183,24 +195,19 @@
         peers[m.id] = peers[m.id] || {}; peers[m.id].name = m.name || 'Peer'; peers[m.id].meta = m.meta || {};
         createTile(m.id, peers[m.id].name);
       });
-      // remove stale
       const memberIds = new Set(members.map(m=>m.id));
       Object.keys(peers).forEach(id=>{ if(id !== socket.id && !memberIds.has(id)){ removeTile(id); delete peers[id]; }});
       updateMemberList(members);
     });
 
-    // handle screenShare notifications (server emits screenShare)
     socket.on('screenShare', ({ active, from }) => {
-      // active: boolean, from: socketId
       if(active) {
-        // mark tile as screen and expand it
         document.querySelectorAll('.tile').forEach(t=> t.classList.remove('screen'));
         const tile = document.getElementById('tile-'+from);
         if(tile) tile.classList.add('screen');
         setTileFullscreenForShare(from);
         toast('Screen shared by ' + (peers[from] && peers[from].name ? peers[from].name : 'Someone'));
       } else {
-        // remove screen classes
         document.querySelectorAll('.tile.screen').forEach(t=> t.classList.remove('screen'));
         setTileFullscreenForShare(null);
         toast('Screen sharing stopped');
@@ -218,7 +225,6 @@
       appendMessage((name||'Peer') + ': ' + text);
     });
 
-    // signaling relay from server
     socket.on('signal', async ({ from, data })=>{
       if(!from || !data) return;
       let pc = peers[from] && peers[from].pc;
@@ -244,7 +250,6 @@
       if(!name || !r){ toast('Enter name & room'); return; }
       joinBtn.disabled = true;
       try {
-        // choose constraints depending on device to improve framing
         const constraints = isMobile
           ? { video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: 'user', aspectRatio: { ideal: 9/16 } }, audio: true }
           : { video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user', aspectRatio: { ideal: 16/9 } }, audio: true };
@@ -253,19 +258,19 @@
         cameraTrack = localStream.getVideoTracks()[0];
         audioEnabled = localStream.getAudioTracks().length ? localStream.getAudioTracks()[0].enabled : true;
 
-        // show local preview
         createTile(socket.id, name + ' (You)', { isLocal: true });
         const localVid = document.getElementById('video-'+socket.id);
         if(localVid) {
           localVid.srcObject = localStream;
-          // mobile: make sure self view isn't distorted — keep object-fit: cover so face is centered
           localVid.style.objectFit = 'cover';
-          // don't mirror on mobile remote, but mirror self-view for naturalness:
-          if(!isMobile) localVid.style.transform = 'scaleX(-1)';
-          else localVid.style.transform = ''; // mobile front camera typically shows correctly
+          // mirror self-view for naturalness if front camera guessed
+          try {
+            const s = cameraTrack.getSettings();
+            if(s && (s.facingMode === 'user' || s.facingMode === 'front')) localVid.style.transform = 'scaleX(-1)';
+            else localVid.style.transform = '';
+          } catch(e){ localVid.style.transform = 'scaleX(-1)'; }
         }
 
-        // enable controls
         startCallBtn.disabled = false; leaveBtn.disabled = false; muteBtn.disabled = false; camBtn.disabled = false; flipBtn.disabled = false; shareBtn.disabled = false;
 
         room = r;
@@ -283,7 +288,6 @@
       peers[id] = peers[id] || {};
       peers[id].pc = pc;
 
-      // add current local tracks
       if(localStream){
         localStream.getTracks().forEach(track => {
           try {
@@ -297,24 +301,20 @@
       pc.onicecandidate = e => { if(e.candidate) socket.emit('signal', { to: id, data: { candidate: e.candidate } }); };
 
       pc.ontrack = e => {
-        // remote stream received
         createTile(id, peers[id].name || 'Peer');
         const remoteVid = document.getElementById('video-'+id);
         if(remoteVid) {
           remoteVid.srcObject = e.streams[0];
-          // if the stream contains a display (screen) it will often be landscape/wide: prefer contain
-          // but we prefer server's screenShare event to mark it. If this tile already has .screen class, use contain:
           const tile = document.getElementById('tile-'+id);
           if(tile && tile.classList.contains('screen')) {
             remoteVid.style.objectFit = 'contain';
           } else {
             remoteVid.style.objectFit = 'cover';
           }
-          remoteVid.style.transform = ''; // remote shouldn't be mirrored
+          remoteVid.style.transform = '';
         }
       };
 
-      // create offer if initiator
       if(isInitiator){
         try {
           const offer = await pc.createOffer();
@@ -373,39 +373,64 @@
     };
 
     // ======= flip camera (mobile) =======
+    function isFrontTrack(track){
+      if(!track || !track.getSettings) return false;
+      const s = track.getSettings();
+      if(s && s.facingMode) return s.facingMode === 'user' || s.facingMode === 'front';
+      try {
+        const lab = (track.label || '').toLowerCase();
+        return lab.includes('front') || lab.includes('facing front') || lab.includes('user');
+      } catch(e){ return false; }
+    }
+
     flipBtn.onclick = async () => {
       try {
         if(!localStream) return toast('Join first');
         const devices = await navigator.mediaDevices.enumerateDevices();
         const vids = devices.filter(d => d.kind === 'videoinput');
         if(vids.length < 2) return toast('No second camera found');
+
         const currentId = cameraTrack && cameraTrack.getSettings && cameraTrack.getSettings().deviceId;
         let idx = vids.findIndex(v => v.deviceId === currentId);
         idx = (idx + 1) % vids.length;
         const nextId = vids[idx].deviceId;
-        const newCam = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: nextId }, facingMode: 'user' }, audio: false });
-        const newTrack = newCam.getVideoTracks()[0];
-        // replace track in localStream
-        if(cameraTrack) {
-          try { localStream.removeTrack(cameraTrack); } catch(e){}
-          try { cameraTrack.stop(); } catch(e){}
-        }
-        localStream.addTrack(newTrack);
-        cameraTrack = newTrack;
-        // replace on senders
-        Object.values(peers).forEach(async p => {
+
+        // request only the new video track
+        const newCamStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: nextId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        const newTrack = newCamStream.getVideoTracks()[0];
+
+        // Replace on peer senders FIRST
+        await Promise.all(Object.values(peers).map(async p => {
           if(p.videoSender && p.videoSender.replaceTrack) {
-            try { await p.videoSender.replaceTrack(cameraTrack); } catch(e){ console.warn('replaceTrack failed', e); }
+            try { await p.videoSender.replaceTrack(newTrack); } catch(e){ console.warn('replaceTrack failed', e); }
           } else if(p.pc) {
             try {
               p.pc.getSenders().forEach(s => { if(s.track && s.track.kind === 'video') try{ p.pc.removeTrack(s); }catch(e){} });
-              const snd = p.pc.addTrack(cameraTrack, localStream);
+              const snd = p.pc.addTrack(newTrack, localStream);
               p.videoSender = snd;
             } catch(e){ console.warn('fallback addTrack failed', e); }
           }
-        });
+        }));
+
+        // Now swap localStream tracks cleanly
+        localStream.getVideoTracks().forEach(t => { try{ localStream.removeTrack(t); }catch(e){} });
+        try { if(cameraTrack) cameraTrack.stop(); } catch(e){}
+        localStream.addTrack(newTrack);
+        cameraTrack = newTrack;
+
+        // update local preview
         const myVid = document.getElementById('video-'+socket.id);
-        if(myVid) myVid.srcObject = localStream;
+        if(myVid) {
+          myVid.srcObject = null;
+          myVid.srcObject = localStream;
+          if(isFrontTrack(newTrack)) myVid.style.transform = 'scaleX(-1)';
+          else myVid.style.transform = '';
+          myVid.style.objectFit = 'cover';
+        }
+
       } catch (e) { toast('Flip failed: ' + (e && e.message ? e.message : e)); }
     };
 
@@ -417,7 +442,7 @@
           screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always' }, audio: false });
           const screenTrack = screenStream.getVideoTracks()[0];
           screenTrack.onended = () => { stopScreenShare(); };
-          // replace camera video track in localStream (keep audio)
+          // replace camera video track in localStream
           if(cameraTrack) { try { localStream.removeTrack(cameraTrack); }catch(e){} try{ cameraTrack.stop(); }catch(e){} }
           localStream.addTrack(screenTrack);
           cameraTrack = screenTrack;
@@ -433,14 +458,11 @@
               } catch(e){ console.warn('fallback addTrack failed', e); }
             }
           });
-          // mark local tile as screen
           const myTile = document.getElementById('tile-'+socket.id) || createTile(socket.id, (nameEl.value||'You') + ' (You)', { isLocal:true });
           myTile.classList.add('screen');
-          // notify server so others can layout properly
           socket.emit('screenShare', { active: true, from: socket.id });
           isSharing = true;
           shareBtn.textContent = 'Stop';
-          // update local preview
           const v = document.getElementById('video-'+socket.id); if(v) { v.srcObject = localStream; v.style.objectFit = 'contain'; v.style.transform = ''; }
         } catch(e) { toast('Screen share failed: ' + (e && e.message ? e.message : e)); }
       } else {
@@ -453,11 +475,10 @@
       try {
         if(screenStream) screenStream.getTracks().forEach(t => { try{ t.stop(); }catch(e){} });
         screenStream = null;
-        // reacquire camera (only video to avoid duplicate audio)
+        // reacquire camera
         try {
           const cam = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
           const newTrack = cam.getVideoTracks()[0];
-          // remove any remaining video tracks
           localStream.getVideoTracks().forEach(t => { try{ localStream.removeTrack(t); }catch(e){} });
           localStream.addTrack(newTrack);
           cameraTrack = newTrack;
@@ -474,7 +495,6 @@
             } catch(e){ console.warn('fallback addTrack failed', e); }
           }
         });
-        // UI cleanup
         const myTile = document.getElementById('tile-'+socket.id); if(myTile) myTile.classList.remove('screen');
         socket.emit('screenShare', { active: false, from: socket.id });
         isSharing = false;
