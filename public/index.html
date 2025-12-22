@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Video Call — Working Client (fixed fullscreen & mobile)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
+ <style>
     :root{
       --bg:#0b1220; --muted:#9aa7bd; --accent:#0b76f6;
     }
@@ -14,11 +14,18 @@
     button{background:var(--accent);color:#fff;border:none;cursor:pointer}
     button.ghost{background:transparent;border:1px solid var(--accent);color:var(--accent)}
     button:disabled{opacity:.5;cursor:not-allowed}
+
+    /* ===== EXISTING STAGE ===== */
     .stage{
       display:grid;
       grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
       gap:10px;
       align-items:start;
+    }
+
+    /* ===== ADD: video-grid behaviour ===== */
+    .stage{
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     }
 
     /* Tile */
@@ -27,30 +34,63 @@
       border-radius:10px;
       overflow:hidden;
       position:relative;
-      /* use aspect ratio to prevent stretching */
-      height: auto;
-      aspect-ratio: 16 / 9;
+      aspect-ratio:16/9;
       display:flex;
       align-items:center;
       justify-content:center;
     }
-    .tile.fullscreen-share{ grid-column: 1 / -1; height: 62vh; } /* when someone shares screen, make tile large */
-    /* video fills tile but keeps aspect using object-fit */
-    video{width:100%;height:100%;display:block;object-fit:cover;transform-origin:center center}
-    /* when we want to show full shared screen (fit entire screen), use contain */
-    .tile.screen video{ object-fit: contain !important; background:#000; }
 
-    .label{position:absolute;left:8px;bottom:8px;background:rgba(0,0,0,.6);color:#fff;padding:6px;border-radius:8px;font-size:13px}
-    .meta{position:absolute;right:8px;top:8px;background:rgba(0,0,0,.45);color:#fff;padding:4px 8px;border-radius:8px;font-size:12px}
+    .tile.fullscreen-share{
+      grid-column:1 / -1;
+      height:62vh;
+    }
+
+    video{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+    }
+
+    .tile.screen video{
+      object-fit:contain !important;
+      background:#000;
+    }
+
+    /* ===== ADD: resize screen-share ===== */
+    .tile.screen{
+      resize: both;
+      overflow: auto;
+      min-width:260px;
+      min-height:160px;
+    }
+
+    /* ===== ADD: mini floating ===== */
+    .tile.mini{
+      width:300px;
+      position:fixed;
+      bottom:10px;
+      right:10px;
+      z-index:999;
+      box-shadow:0 10px 30px rgba(0,0,0,.6);
+    }
+
+    .label{
+      position:absolute;
+      left:8px;
+      bottom:8px;
+      background:rgba(0,0,0,.6);
+      padding:6px;
+      border-radius:6px;
+      font-size:13px;
+    }
+
     .chat{margin-top:12px;background:rgba(255,255,255,0.03);padding:10px;border-radius:8px}
-    #messages{height:180px;overflow:auto;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02)}
+    #messages{height:180px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px}
     .toast{position:fixed;right:16px;top:16px;background:rgba(0,0,0,.7);color:#fff;padding:10px;border-radius:8px}
-    .controls-right{margin-left:auto;display:flex;gap:10px;align-items:center}
-    @media (max-width:700px){
-      .tile.fullscreen-share{ height:55vh; }
-      /* mobile keep cover by default (face-centered) */
-      video{ object-fit:cover; }
-      .stage{ grid-template-columns: repeat(1, minmax(0, 1fr)); }
+
+    @media(max-width:700px){
+      .tile.fullscreen-share{height:55vh}
+      .stage{grid-template-columns:1fr}
     }
   </style>
 </head>
@@ -65,6 +105,7 @@
     <button id="camBtn" disabled>Cam Off</button>
     <button id="flipBtn" disabled>Flip</button>
     <button id="shareBtn" disabled>Share</button>
+      <button onclick="toggleMini()">Mini</button>
     <div class="controls-right">Socket: <span id="sid">-</span></div>
   </div>
 
@@ -84,6 +125,11 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
+    /* ===== ADD: mini toggle (NO logic removed) ===== */
+function toggleMini(){
+  const tile = document.getElementById('tile-'+socket.id);
+  if(tile) tile.classList.toggle('mini');
+}
     // ======= CONFIG =======
     const socket = io(); // same-origin
     const STUN = { urls: 'stun:stun.l.google.com:19302' };
